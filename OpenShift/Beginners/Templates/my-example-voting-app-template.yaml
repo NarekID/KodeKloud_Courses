@@ -1,0 +1,649 @@
+apiVersion: v1
+kind: Template
+metadata:
+  creationTimestamp: null
+  name: example-voting-app-template
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: db
+  stringData:
+    database-name: db
+    database-password: db
+    database-user: db
+  type: Opaque
+
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    name: result
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: 'result:latest'
+    runPolicy: Serial
+    source:
+      contextDir: /result
+      git:
+        ref: master
+        uri: 'http://192.168.99.105/NarekID/example-voting-app.git'
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+          - name: PORT
+            value: '8080'
+        from:
+          kind: ImageStreamTag
+          name: 'nodejs:10'
+          namespace: openshift
+      type: Source
+    triggers:
+      - generic:
+          secret: 3dcf0b96be1f7a55
+        type: Generic
+      - github:
+          secret: 63defbc53eba8783
+        type: GitHub
+      - imageChange:
+          lastTriggeredImageID: >-
+            172.30.1.1:5000/openshift/nodejs@sha256:3cc041334eef8d5853078a0190e46a2998a70ad98320db512968f1de0561705e
+        type: ImageChange
+      - type: ConfigChange
+  status:
+    lastVersion: 1
+
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    name: vote
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: 'vote:latest'
+    runPolicy: Serial
+    source:
+      contextDir: /vote
+      git:
+        ref: master
+        uri: 'http://192.168.99.105/NarekID/example-voting-app.git'
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: 'python:3.6'
+          namespace: openshift
+      type: Source
+    triggers:
+      - imageChange:
+          lastTriggeredImageID: >-
+            172.30.1.1:5000/openshift/python@sha256:ac50754646f0d37616515fb30467d8743fb12954260ec36c9ecb5a94499447e0
+        type: ImageChange
+      - type: ConfigChange
+      - generic:
+          secret: f57f0e3166a83569
+        type: Generic
+      - github:
+          secret: 83caef8386404e24
+        type: GitHub
+
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    name: worker
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: 'worker:latest'
+    runPolicy: Serial
+    source:
+      contextDir: /worker
+      git:
+        ref: master
+        uri: 'http://192.168.99.105/NarekID/example-voting-app.git'
+      type: Git
+    strategy:
+      dockerStrategy: {}
+      type: Docker
+    triggers:
+      - generic:
+          secret: e6453c62d386b021
+        type: Generic
+      - github:
+          secret: 12766d9f528663a3
+        type: GitHub
+      - type: ConfigChange
+
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    name: result
+  spec:
+    lookupPolicy:
+      local: false
+
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    name: vote
+  spec:
+    lookupPolicy:
+      local: false
+
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    name: worker
+  spec:
+    lookupPolicy:
+      local: false
+
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    name: db
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      name: db
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: db
+      spec:
+        containers:
+          - env:
+              - name: POSTGRESQL_USER
+                valueFrom:
+                  secretKeyRef:
+                    key: database-user
+                    name: db
+              - name: POSTGRESQL_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    key: database-password
+                    name: db
+              - name: POSTGRESQL_DATABASE
+                valueFrom:
+                  secretKeyRef:
+                    key: database-name
+                    name: db
+            image: 
+            imagePullPolicy: IfNotPresent
+            livenessProbe:
+              exec:
+                command:
+                  - /usr/libexec/check-container
+                  - '--live'
+              failureThreshold: 3
+              initialDelaySeconds: 120
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 10
+            name: postgresql
+            ports:
+              - containerPort: 5432
+                protocol: TCP
+            readinessProbe:
+              exec:
+                command:
+                  - /usr/libexec/check-container
+              failureThreshold: 3
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                memory: 512Mi
+            securityContext:
+              capabilities: {}
+              privileged: false
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+            volumeMounts:
+              - mountPath: /var/lib/pgsql/data
+                name: db-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+          - name: db-data
+            persistentVolumeClaim:
+              claimName: db
+    test: false
+    triggers:
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - postgresql
+          from:
+            kind: ImageStreamTag
+            name: 'postgresql:9.6'
+            namespace: openshift
+        type: ImageChange
+      - type: ConfigChange
+
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    name: redis
+  spec:
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      name: redis
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: redis
+      spec:
+        containers:
+          - image: 
+            imagePullPolicy: IfNotPresent
+            livenessProbe:
+              failureThreshold: 3
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              successThreshold: 1
+              tcpSocket:
+                port: 6379
+              timeoutSeconds: 1
+            name: redis
+            ports:
+              - containerPort: 6379
+                protocol: TCP
+            readinessProbe:
+              exec:
+                command:
+                  - /bin/sh
+                  - '-i'
+                  - '-c'
+                  - test "$(redis-cli -h 127.0.0.1 ping)" == "PONG"
+              failureThreshold: 3
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              successThreshold: 1
+              timeoutSeconds: 1
+            resources:
+              limits:
+                memory: 512Mi
+            securityContext:
+              capabilities: {}
+              privileged: false
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+            volumeMounts:
+              - mountPath: /var/lib/redis/data
+                name: redis-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+          - emptyDir: {}
+            name: redis-data
+    test: false
+    triggers:
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - redis
+          from:
+            kind: ImageStreamTag
+            name: 'redis:3.2'
+            namespace: openshift
+        type: ImageChange
+      - type: ConfigChange
+
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    name: result
+  spec:
+    replicas: 1
+    selector:
+      deploymentconfig: result
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: result
+          deploymentconfig: result
+      spec:
+        containers:
+          - env:
+              - name: PORT
+                value: '8080'
+            image: 
+            imagePullPolicy: Always
+            name: result
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            resources: {}
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - result
+          from:
+            kind: ImageStreamTag
+            name: 'result:latest'
+            namespace: voting-application
+        type: ImageChange
+      - type: ConfigChange
+
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    name: vote
+  spec:
+    replicas: 1
+    selector:
+      deploymentconfig: vote
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: vote
+          deploymentconfig: vote
+      spec:
+        containers:
+          - env:
+              - name: REDIS_PASSWORD
+                value: redis_password
+            image: 
+            imagePullPolicy: Always
+            name: vote
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+            resources: {}
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - vote
+          from:
+            kind: ImageStreamTag
+            name: 'vote:latest'
+            namespace: voting-application
+        type: ImageChange
+      - type: ConfigChange
+
+- apiVersion: apps.openshift.io/v1
+  kind: DeploymentConfig
+  metadata:
+    name: worker
+  spec:
+    replicas: 1
+    selector:
+      deploymentconfig: worker
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: worker
+          deploymentconfig: worker
+      spec:
+        containers:
+          - image: 
+            imagePullPolicy: Always
+            name: worker
+            ports:
+              - containerPort: 8080
+                protocol: TCP
+              - containerPort: 8443
+                protocol: TCP
+            resources: {}
+            terminationMessagePath: /dev/termination-log
+            terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+      - imageChangeParams:
+          automatic: true
+          containerNames:
+            - worker
+          from:
+            kind: ImageStreamTag
+            name: 'worker:latest'
+            namespace: voting-application
+        type: ImageChange
+      - type: ConfigChange
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: worker
+  spec:
+    ports:
+      - name: 8080-tcp
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+      - name: 8443-tcp
+        port: 8443
+        protocol: TCP
+        targetPort: 8443
+    selector:
+      deploymentconfig: worker
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: result
+  spec:
+    ports:
+      - name: 8080-tcp
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+    selector:
+      deploymentconfig: result
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: db
+  spec:
+    ports:
+      - name: postgresql
+        port: 5432
+        protocol: TCP
+        targetPort: 5432
+    selector:
+      name: db
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: vote
+  spec:
+    ports:
+      - name: 8080-tcp
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+    selector:
+      deploymentconfig: vote
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: redis
+  spec:
+    ports:
+      - name: redis
+        port: 6379
+        protocol: TCP
+        targetPort: 6379
+    selector:
+      name: redis
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: worker
+  spec:
+    host: 
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: worker
+      weight: 100
+    wildcardPolicy: None
+  status:
+    ingress:
+      - conditions:
+          - lastTransitionTime: '2021-08-14T15:57:45Z'
+            status: 'True'
+            type: Admitted
+        host: worker-voting-application.192.168.99.108.nip.io
+        routerName: router
+        wildcardPolicy: None
+
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: result
+  spec:
+    host: 
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: result
+      weight: 100
+    wildcardPolicy: None
+  status:
+    ingress:
+      - conditions:
+          - lastTransitionTime: '2021-08-14T15:55:24Z'
+            status: 'True'
+            type: Admitted
+        host: 
+        routerName: router
+        wildcardPolicy: None
+
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    name: vote
+  spec:
+    host: 
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: vote
+      weight: 100
+    wildcardPolicy: None
+  status:
+    ingress:
+      - conditions:
+          - lastTransitionTime: '2021-08-14T15:24:08Z'
+            status: 'True'
+            type: Admitted
+        host: 
+        routerName: router
+        wildcardPolicy: None
+
